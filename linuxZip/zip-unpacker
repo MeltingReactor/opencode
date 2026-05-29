@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import math
+import subprocess
+import threading
+import zipfile
+import tarfile
+import gzip
+import bz2
+import lzma
+import gi
+
+gi.require_version("Notify", "0.7")
+from gi.repository import GLib, Notify
+
+
+def extract_name(path):
+    name = os.path.basename(path).lower()
+    for sep in ('.tar.gz', '.tar.bz2', '.tar.xz', '.tar.lzma',
+                '.tar.zst', '.tar.lz4', '.tar.lrz', '.tar.lz',
+                '.tgz', '.tbz2', '.txz', '.tzst'):
+        if name.endswith(sep):
+            return name[:-len(sep)]
+    return os.path.splitext(name)[0]
+
+
+def single_root_dir(path):
+    tops = set()
+    is_zip = zipfile.is_zipfile(path)
+
+    if is_zip:
+        with zipfile.ZipFile(path) as zf:
+            for n in zf.namelist():
+                n = n.rstrip('/')
+                if not n:
+                    continue
+                top = n.split('/')[0]
+                if '/' not in n:
+                    return None
+                tops.add(top)
+    else:
+        try:
+            with tarfile.open(path, 'r:*') as tf:
+                for m in tf.getmembers():
+                    n = m.name.rstrip('/')
+                    if not n:
+                        continue
+                    top = n.split('/')[0]
+                    if '/' not in n and not m.isdir():
+                        return None
+                    tops.add(top)
+        except (tarfile.ReadError, tarfile.CompressionError):
+            return None
+
+    return next(iter(tops)) if len(tops) == 1 else None
+
+
+def icon_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "archive.png")
+
+
+def show_final(summary, body, extract_dir, timeout=10):
+    loop = GLib.MainLoop()
+
+    def on_open(notification, action, user_data):
+        subprocess.Popen(["xdg-open", user_data], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        loop.quit()
+
+    n = Notify.Notification.new(summary, body, icon_path())
+    n.add_action("open", "Open Location", on_open, extract_dir)
+    n.set_timeout(timeout * 1000)
+    n.show()
+    GLib.timeout_add_seconds(timeout + 20, loop.quit)
+    loop.run()
+
+
+def do_extract(path, out_dir, report):
+    root = single_root_dir(path)
+    target = os.path.dirname(out_dir) if root else out_dir
+    name = os.path.basename(path).lower()
+
+    try:
+        os.makedirs(target, exist_ok=True)
+
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as zf:
+                names = [n for n in zf.namelist() if not n.endswith('/')]
+                total = len(names)
+                for i, n in enumerate(names):
+                    zf.extract(n, target)
+                    report(i + 1, total)
+            return (target, None)
+
+        if any(name.endswith(s) for s in
+            ('.tar', '.tar.gz', '.tar.bz2', '.tar.xz', '.tar.lzma', '.tar.zst',
+             '.tar.lz4', '.tar.lrz', '.tar.lz', '.tgz', '.tbz2', '.txz', '.tzst')):
+            with tarfile.open(path, 'r:*') as tf:
+                members = [m for m in tf.getmembers() if m.isfile()]
+                total = len(members)
+                for i, m in enumerate(members):
+                    tf.extract(m, target)
+                    report(i + 1, total)
+            return (target, None)
+
+        if name.endswith('.gz'):
+            out = os.path.join(out_dir, name.removesuffix('.gz'))
+            with gzip.open(path, 'rb') as fi, open(out, 'wb') as fo:
+                total = os.path.getsize(path)
+                copied = 0
+                while True:
+                    chunk = fi.read(65536)
+                    if not chunk:
+                        break
+                    fo.write(chunk)
+                    copied += len(chunk)
+                    report(copied, total)
+            return (out_dir, None)
+
+        if name.endswith('.bz2'):
+            out = os.path.join(out_dir, name.removesuffix('.bz2'))
+            with bz2.open(path, 'rb') as fi, open(out, 'wb') as fo:
+                total = os.path.getsize(path)
+                copied = 0
+                while True:
+                    chunk = fi.read(65536)
+                    if not chunk:
+                        break
+                    fo.write(chunk)
+                    copied += len(chunk)
+                    report(copied, total)
+            return (out_dir, None)
+
+        if name.endswith(('.xz', '.lzma')):
+            out = os.path.join(out_dir, name.removesuffix('.xz').removesuffix('.lzma'))
+            with lzma.open(path, 'rb') as fi, open(out, 'wb') as fo:
+                total = os.path.getsize(path)
+                copied = 0
+                while True:
+                    chunk = fi.read(65536)
+                    if not chunk:
+                        break
+                    fo.write(chunk)
+                    copied += len(chunk)
+                    report(copied, total)
+            return (out_dir, None)
+
+        # External fallback
+        for cmd in (
+            ['unar', '-q', '-o', target, path],
+            ['7z', 'x', f'-o{target}', '-y', path],
+        ):
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=120)
+                if os.listdir(target):
+                    return (target, None)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+
+        return (None, RuntimeError("Unsupported format. Install unar or p7zip-full."))
+
+    except Exception as e:
+        return (None, e)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(f"Usage: {sys.argv[0]} <archive>")
+        sys.exit(1)
+
+    path = os.path.abspath(sys.argv[1])
+    if not os.path.isfile(path):
+        print(f"Error: {path} not found")
+        sys.exit(1)
+
+    Notify.init("Zip Unpacker")
+    base = extract_name(path)
+    out_dir = os.path.join(os.path.dirname(path), base)
+
+    progress = {"current": 0, "total": 1, "done": False}
+    result = [None, None]
+    lock = threading.Lock()
+
+    def report(current, total):
+        with lock:
+            progress["current"] = current
+            progress["total"] = total
+
+    # Show initial progress notification
+    n = Notify.Notification.new("Extracting...", "", icon_path())
+    n.set_hint("value", GLib.Variant("i", 0))
+    n.set_timeout(0)
+    n.show()
+
+    loop = GLib.MainLoop()
+
+    def worker():
+        target, err = do_extract(path, out_dir, report)
+        with lock:
+            result[0] = target
+            result[1] = err
+            progress["done"] = True
+        GLib.idle_add(lambda: loop.quit())
+
+    last_file = ""
+    tick = 0
+
+    def poll():
+        nonlocal tick, last_file
+        with lock:
+            p = progress.copy()
+        if p["done"]:
+            return False
+        tick += 1
+        val = int((math.sin(tick * 0.15) + 1) * 50)
+        n.set_hint("value", GLib.Variant("i", val))
+        label = f"Extracting: {p['current']} / {p['total']} files" if p["total"] > 1 else "Extracting..."
+        n.update("Extracting...", label, icon_path())
+        n.show()
+        return True
+
+    GLib.timeout_add(60, poll)
+    threading.Thread(target=worker, daemon=True).start()
+    loop.run()
+
+    n.close()
+    target, err = result
+
+    if err:
+        show_final("Extraction failed", str(err), "")
+    elif target:
+        show_final("Extraction complete", f"Extracted to: {target}", target)
+    else:
+        show_final("Extraction failed", "Unsupported format. Install unar or p7zip-full.", "")
+
+
+if __name__ == "__main__":
+    main()
