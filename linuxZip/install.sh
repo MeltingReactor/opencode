@@ -14,7 +14,7 @@ if command -v apt &>/dev/null; then
     sudo apt install -y python3-gi gir1.2-notify-0.7 xdg-utils unar p7zip-full
 elif command -v pacman &>/dev/null; then
     echo "[1/3] Installing system dependencies (requires sudo)..."
-    sudo pacman -Sy --noconfirm python-gobject libnotify xdg-utils unar p7zip
+    sudo pacman -Sy --noconfirm python-gobject libnotify xdg-utils unarchiver p7zip
 elif command -v dnf &>/dev/null; then
     echo "[1/3] Installing system dependencies (requires sudo)..."
     sudo dnf install -y python3-gobject libnotify xdg-utils unar p7zip p7zip-plugins
