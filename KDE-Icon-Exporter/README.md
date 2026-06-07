@@ -1,6 +1,10 @@
 # KDE Icon Exporter
 A simple program to extract system icons as **.svg** and **.png** files.
 
+> [!WARNING]
+> Currently, the install script is broken due to repo changes.
+> Please use the portable version.
+
 ## Installation
 
 This command will download **install.sh** and run the **start.sh** script:
