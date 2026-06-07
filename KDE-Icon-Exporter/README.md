@@ -2,8 +2,8 @@
 A simple program to extract system icons as **.svg** and **.png** files.
 
 > [!WARNING]
-> Currently, the install script is broken due to repo changes.
-> Please use the portable version.
+> **Currently, the install script is broken due to repo changes.**
+> **Please use the portable version.**
 
 ## Installation
 
