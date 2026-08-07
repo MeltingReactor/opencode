@@ -73,7 +73,7 @@ Comment=Unpack zip files easily on Hyprland
 Exec=$BIN_DIR/$APP %f
 Icon=$ICON_DIR/$APP.png
 Terminal=false
-MimeType=application/zip;application/x-7z-compressed;application/x-rar;
+MimeType=application/zip;application/x-7z-compressed;application/x-rar;application/x-xz-compressed-tar;
 Categories=Utility;
 EOF
 
